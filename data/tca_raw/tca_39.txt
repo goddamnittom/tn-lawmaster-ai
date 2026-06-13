@@ -1,0 +1,4 @@
+TCA Title 39: Criminal Offenses.
+Section 39-14-101: Theft is a criminal offense. A person commits theft when they obtain or exert unauthorized control over the property of another.
+Section 39-14-102: Theft of property valued over ,500 is a Class E felony.
+Section 39-14-103: Theft of property valued under ,500 is a Class A misdemeanor.
