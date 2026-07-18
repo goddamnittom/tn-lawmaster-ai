@@ -1,0 +1,10 @@
+# This file keeps the data/ directory tracked in git.
+# Place your TCA PDF or TXT source files here for ingestion.
+#
+# Example structure:
+#   data/
+#     tca_title39_criminal.pdf
+#     tca_title36_family.pdf
+#     tca_title66_property.pdf
+#
+# Then run: python -c "from tn_law_agent.knowledge.ingester import TNLawIngester; TNLawIngester().ingest_directory()"
