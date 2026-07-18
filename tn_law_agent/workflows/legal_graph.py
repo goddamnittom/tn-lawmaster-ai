@@ -4,22 +4,26 @@ TN-LawMaster — LangGraph Legal Analysis Workflow
 Production-grade RAG + LangGraph pipeline for Tennessee law analysis.
 
 Pipeline stages:
-  1. retrieve_law      — Vector store lookup (or TCA keyword fallback)
-  2. rerank_context    — Relevance-score and top-k filter
-  3. legal_analyze     — LLM grounded analysis with strict TCA prompt
-  4. generate_citations— Audit trail of referenced TCA statutes
+  1. load_memory       — Load prior conversation turns from SQLite
+  2. retrieve_law      — Vector store lookup (or TCA keyword fallback)
+  3. rerank_context    — Relevance-score and top-k filter
+  4. legal_analyze     — LLM grounded analysis with strict TCA prompt
+  5. generate_citations— Audit trail of referenced TCA statutes
+  6. save_memory       — Persist Q&A turn to SQLite
 
 Author: TN-LawMaster Project
 """
 
 from __future__ import annotations
 
-import re
 import logging
 import operator
-from typing import Annotated, Dict, List, TypedDict
+import os
+import re
+import uuid
+from typing import Annotated, Dict, List, Optional, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 logger = logging.getLogger(__name__)
@@ -95,12 +99,18 @@ Consult a licensed Tennessee attorney for your specific situation."""
 # ── TCA Citation Pattern ──────────────────────────────────
 _TCA_CITATION_RE = re.compile(r"TCA\s*§\s*[\d]+-[\d]+-[\d]+")
 
+# ── Memory configuration ──────────────────────────────────
+_MEMORY_DB_PATH: str = os.environ.get("MEMORY_DB_PATH", "./memory.db")
+_MEMORY_MAX_TURNS: int = int(os.environ.get("MEMORY_MAX_TURNS", "6"))
+
 
 # ── LangGraph State ───────────────────────────────────────
 
 class LegalAgentState(TypedDict):
     query: str
     domain: str                                         # e.g. "criminal", "family"
+    session_id: str                                     # conversation session identifier
+    messages: Annotated[List[BaseMessage], operator.add]  # conversation history messages
     documents: Annotated[List[Dict], operator.add]     # accumulates across retries
     reranked_docs: List[Dict]
     analysis: str
@@ -112,25 +122,75 @@ class LegalAgentState(TypedDict):
 # ── Graph Class ───────────────────────────────────────────
 
 class TNLawGraph:
-    """LangGraph-based Tennessee law analysis pipeline."""
+    """LangGraph-based Tennessee law analysis pipeline with conversation memory."""
 
     def __init__(self, llm, vector_store=None):
         self.llm = llm
         self.vector_store = vector_store
 
+        # Lazy-init memory: created on first use to avoid DB creation during import
+        self._memory = None
+
         workflow = StateGraph(LegalAgentState)
+        workflow.add_node("load_memory", self.load_memory)
         workflow.add_node("retrieve_law", self.retrieve_law)
         workflow.add_node("rerank_context", self.rerank_context)
         workflow.add_node("legal_analyze", self.legal_analyze)
         workflow.add_node("generate_citations", self.generate_citations)
+        workflow.add_node("save_memory", self.save_memory)
 
-        workflow.add_edge(START, "retrieve_law")
+        workflow.add_edge(START, "load_memory")
+        workflow.add_edge("load_memory", "retrieve_law")
         workflow.add_edge("retrieve_law", "rerank_context")
         workflow.add_edge("rerank_context", "legal_analyze")
         workflow.add_edge("legal_analyze", "generate_citations")
-        workflow.add_edge("generate_citations", END)
+        workflow.add_edge("generate_citations", "save_memory")
+        workflow.add_edge("save_memory", END)
 
         self.graph = workflow.compile()
+
+    # ── Memory helpers ────────────────────────────────────
+
+    def _get_memory(self):
+        """Lazy-initialise the ConversationMemory instance."""
+        if self._memory is None:
+            from tn_law_agent.utils.memory import ConversationMemory
+            self._memory = ConversationMemory(
+                db_path=_MEMORY_DB_PATH,
+                max_turns=_MEMORY_MAX_TURNS,
+            )
+        return self._memory
+
+    # ── Step 0: Load Memory ───────────────────────────────
+
+    def load_memory(self, state: LegalAgentState) -> dict:
+        """
+        Load prior conversation turns for the current session and convert
+        them into LangChain ``BaseMessage`` objects stored in ``messages``.
+        """
+        session_id = state.get("session_id", "")
+        if not session_id:
+            logger.debug("[load_memory] no session_id — skipping memory load")
+            return {"messages": []}
+
+        logger.info("[load_memory] loading history for session=%s", session_id)
+        try:
+            turns = self._get_memory().load(session_id)
+        except Exception as exc:
+            logger.warning("[load_memory] could not load history: %s", exc)
+            return {"messages": []}
+
+        messages: List[BaseMessage] = []
+        for turn in turns:
+            role = turn.get("role", "")
+            content = turn.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(SystemMessage(content=content))
+
+        logger.info("[load_memory] loaded %d prior messages", len(messages))
+        return {"messages": messages}
 
     # ── Step 1: Retrieve ─────────────────────────────────
 
@@ -140,7 +200,11 @@ class TNLawGraph:
 
         if self.vector_store is not None:
             try:
-                raw = self.vector_store.search(state["query"])
+                # Prefer hybrid_search when available (BM25 + dense fusion)
+                if hasattr(self.vector_store, "hybrid_search"):
+                    raw = self.vector_store.hybrid_search(state["query"])
+                else:
+                    raw = self.vector_store.search(state["query"])
                 docs = [
                     {"text": d.get("text", d), "source": d.get("source", "TCA")}
                     if isinstance(d, dict)
@@ -207,7 +271,24 @@ class TNLawGraph:
             f"[Source: {d.get('source', 'TCA')}]\n{d.get('text', '')}"
             for d in docs
         )
+
+        # Build conversation history prefix if prior messages exist
+        prior_messages = state.get("messages", [])
+        history_prefix = ""
+        if prior_messages:
+            history_lines = []
+            for msg in prior_messages:
+                if isinstance(msg, HumanMessage):
+                    history_lines.append(f"User: {msg.content}")
+                else:
+                    history_lines.append(f"Assistant: {msg.content}")
+            history_text = "\n".join(history_lines)
+            history_prefix = (
+                f"Conversation History (for context):\n{history_text}\n\n"
+            )
+
         human_prompt = (
+            f"{history_prefix}"
             f"Domain: {domain_info['desc']}\n\n"
             f"Context:\n{context_blocks or 'No specific context retrieved — use your TCA knowledge.'}\n\n"
             f"Question: {state['query']}"
@@ -244,15 +325,47 @@ class TNLawGraph:
         all_citations = list(dict.fromkeys(found + doc_sources))  # dedupe, preserve order
         return {"citations": all_citations, "status": "complete"}
 
+    # ── Step 5: Save Memory ──────────────────────────────
+
+    def save_memory(self, state: LegalAgentState) -> dict:
+        """
+        Persist the current Q&A turn to the conversation memory store.
+        A no-op when ``session_id`` is empty or memory save fails.
+        """
+        session_id = state.get("session_id", "")
+        if not session_id:
+            logger.debug("[save_memory] no session_id — skipping memory save")
+            return {}
+
+        query = state.get("query", "")
+        analysis = state.get("analysis", "")
+
+        if not query or not analysis:
+            return {}
+
+        logger.info("[save_memory] saving turn for session=%s", session_id)
+        try:
+            self._get_memory().save(
+                session_id=session_id,
+                user_msg=query,
+                assistant_msg=analysis,
+            )
+        except Exception as exc:
+            logger.warning("[save_memory] could not save history: %s", exc)
+
+        return {}
+
     # ── Public API ───────────────────────────────────────
 
-    def invoke(self, query: str, domain: str = "general") -> dict:
+    def invoke(self, query: str, domain: str = "general", session_id: Optional[str] = None) -> dict:
         """
         Run the full analysis pipeline.
 
         Args:
-            query:  The legal question.
-            domain: TCA domain hint (e.g. "criminal", "family", "property").
+            query:      The legal question.
+            domain:     TCA domain hint (e.g. "criminal", "family", "property").
+            session_id: Optional session identifier for multi-turn memory.
+                        If omitted, no conversation history is loaded or saved.
 
         Returns:
             dict with keys: query, analysis, citations, status, error
@@ -260,6 +373,8 @@ class TNLawGraph:
         initial_state: LegalAgentState = {
             "query": query,
             "domain": domain,
+            "session_id": session_id or "",
+            "messages": [],
             "documents": [],
             "reranked_docs": [],
             "analysis": "",

@@ -1,4 +1,4 @@
-# TN-LawMaster — Core Dependencies
+# TN-LawMaster — Dependencies (v2)
 # ==========================================
 # Install: pip install -r requirements.txt
 
@@ -11,7 +11,7 @@ langgraph>=0.2.0
 # ── LLM Backend Adapters ──────────────────
 langchain-ollama>=0.2.0        # Local Ollama (Gemma, Llama, Mistral, etc.)
 langchain-groq>=0.2.0          # Groq cloud inference
-langchain-openai>=0.2.0        # OpenAI + OpenRouter (uses OpenAI-compatible API)
+langchain-openai>=0.2.0        # OpenAI + OpenRouter (OpenAI-compatible API)
 
 # ── FastAPI Backend ───────────────────────
 fastapi>=0.115.0
@@ -19,16 +19,22 @@ uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 python-multipart                # File uploads
 
+# ── Rate Limiting & Caching ───────────────
+slowapi>=0.1.9                  # Rate limiting (optional — disables gracefully if absent)
+cachetools>=5.3.0               # TTL response cache (optional)
+
 # ── Streamlit UI ──────────────────────────
 streamlit>=1.39.0
 
 # ── Vector Store (ChromaDB) ───────────────
 chromadb>=0.5.0
 sentence-transformers>=3.0.0   # all-MiniLM-L6-v2 embeddings (local, free)
+rank-bm25>=0.2.2               # Optional: BM25 hybrid search
 
 # ── Document Processing ───────────────────
 pymupdf>=1.24.0                # PDF ingestion (fitz)
 pypdf>=4.0.0                   # Alternative PDF reader
+reportlab>=4.0.0               # PDF export (optional — /export/pdf endpoint)
 
 # ── Web Scraping & HTTP ───────────────────
 aiohttp>=3.10.0

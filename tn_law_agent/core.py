@@ -45,15 +45,23 @@ class TNLawAgent:
         self.graph = TNLawGraph(llm=llm, vector_store=vector_store)
         logger.info("TNLawAgent initialized (vector_store=%s)", vector_store is not None)
 
-    def analyze(self, query: str, domain: str = "general") -> dict:
+    def analyze(
+        self,
+        query: str,
+        domain: str = "general",
+        session_id: Optional[str] = None,
+    ) -> dict:
         """
         Analyze a Tennessee law question.
 
         Args:
-            query:  The legal question (plain English or formal legal language).
-            domain: TCA domain hint. One of:
-                    criminal, family, property, business, torts,
-                    estates, traffic, tipa, general (default)
+            query:      The legal question (plain English or formal legal language).
+            domain:     TCA domain hint. One of:
+                        criminal, family, property, business, torts,
+                        estates, traffic, tipa, general (default)
+            session_id: Optional session identifier for multi-turn conversation memory.
+                        If provided, prior turns for this session are loaded and the
+                        current Q&A is saved for future calls.
 
         Returns:
             A dict with:
@@ -67,8 +75,9 @@ class TNLawAgent:
             logger.warning("Unknown domain '%s', falling back to 'general'", domain)
             domain = "general"
 
-        logger.info("Analyzing query (domain=%s): %s", domain, query[:120])
-        return self.graph.invoke(query=query, domain=domain)
+        logger.info("Analyzing query (domain=%s, session=%s): %s",
+                    domain, session_id, query[:120])
+        return self.graph.invoke(query=query, domain=domain, session_id=session_id)
 
     @property
     def covered_domains(self) -> list[str]:
