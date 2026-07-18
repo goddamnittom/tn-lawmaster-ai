@@ -7,6 +7,8 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2%2B-purple)](https://github.com/langchain-ai/langgraph)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.39%2B-FF4B4B?logo=streamlit)](https://streamlit.io)
+[![CI](https://github.com/goddamnittom/tn-lawmaster-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/goddamnittom/tn-lawmaster-ai/actions/workflows/ci.yml)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/goddamnittom/tn-lawmaster-ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 ---
@@ -226,6 +228,47 @@ Returns all supported TCA domains with titles and descriptions.
 
 ---
 
+## ☁️ GitHub Codespaces (Zero Setup)
+
+Click the badge at the top or:
+
+```
+https://codespaces.new/goddamnittom/tn-lawmaster-ai
+```
+
+The Codespaces container automatically:
+1. Installs all Python dependencies
+2. Forwards **port 8000** (FastAPI) and **port 8501** (Streamlit — auto-opens in browser)
+3. Seeds the TCA vector store with built-in synthetic corpus
+4. Opens VS Code with ruff, Pylance, and REST Client pre-installed
+
+Just add your API key to `.env` and go.
+
+---
+
+## 📥 TCA Data Ingestion (`scripts/ingest_tca.py`)
+
+The ingestion script seeds and expands the vector store:
+
+```bash
+# Quick start — seed built-in corpus (no network needed, covers all 9 domains)
+python scripts/ingest_tca.py --seed-only
+
+# Scrape specific TCA titles from Justia (public law, politely rate-limited)
+python scripts/ingest_tca.py --titles 39 36 66
+
+# Ingest all PDFs you placed in data/
+python scripts/ingest_tca.py --local-only
+
+# Full run: seed + all Justia titles + local files
+python scripts/ingest_tca.py --all
+```
+
+The built-in seed corpus includes key sections for all 9 domains so the agent works
+out-of-the-box even without network access or uploaded PDFs.
+
+---
+
 ## 🐳 Docker
 
 ### Single Container
@@ -263,20 +306,31 @@ pytest test_production.py -v
 tn-lawmaster-ai/
 ├── .env.example                    # Configuration template
 ├── .gitignore                      # Excludes secrets, __pycache__, data/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # CI: lint, unit tests (Py 3.11+3.12), integration
+├── .devcontainer/
+│   ├── devcontainer.json           # Codespaces config (ports, extensions)
+│   └── setup.sh                    # Post-create: install deps, seed corpus
 ├── requirements.txt                # All Python dependencies
-├── model_config.py                 # Multi-backend LLM switcher
+├── pyproject.toml                  # Project metadata, ruff, mypy, pytest markers
+├── LICENSE                         # MIT
+├── model_config.py                 # Multi-backend LLM switcher (Ollama/Groq/OpenAI/OpenRouter)
 ├── main_fastapi.py                 # FastAPI REST API
 ├── streamlit_app.py                # Streamlit web UI
 ├── run_agent.py                    # CLI interactive runner
 ├── test_production.py              # pytest unit + integration tests
 ├── Dockerfile                      # Single-container build
+├── scripts/
+│   └── ingest_tca.py               # TCA ingestion: seed corpus + Justia scraper + local PDFs
 ├── data/                           # Place TCA PDFs/TXT here for ingestion
+│   └── .gitkeep
 ├── tn_law_agent/
 │   ├── core.py                     # TNLawAgent high-level wrapper
 │   ├── knowledge/
-│   │   └── ingester.py             # TCA document ingestion (PDF, text, URL)
+│   │   └── ingester.py             # TCA document ingestion (PDF, text, URL → ChromaDB)
 │   └── workflows/
-│       └── legal_graph.py          # LangGraph 4-node pipeline
+│       └── legal_graph.py          # LangGraph 4-node pipeline + TCA domain profiles
 └── tn-lawmaster-production/
     ├── Dockerfile                  # Production-hardened image
     ├── docker-compose.yml          # Multi-service deployment

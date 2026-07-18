@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Lint & Format
+  # ──────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check . --output-format=github
+
+  # ──────────────────────────────────────────────
+  # Unit Tests (no API keys required)
+  # ──────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest test_production.py -v -m unit --tb=short
+
+      - name: Upload coverage (optional)
+        if: matrix.python-version == '3.12'
+        continue-on-error: true
+        run: |
+          pip install pytest-cov
+          pytest test_production.py -m unit --cov=tn_law_agent --cov-report=xml -q
+          # Uncomment below to upload to Codecov:
+          # bash <(curl -s https://codecov.io/bash)
+
+  # ──────────────────────────────────────────────
+  # Import / Smoke Test (verifies the package loads)
+  # ──────────────────────────────────────────────
+  smoke:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify imports
+        env:
+          # Use ollama backend; no server needed just to import
+          ACTIVE_BACKEND: ollama
+        run: |
+          python -c "from tn_law_agent.core import TNLawAgent; print('✅ TNLawAgent importable')"
+          python -c "from tn_law_agent.knowledge.ingester import TNLawIngester; print('✅ TNLawIngester importable')"
+          python -c "from tn_law_agent.workflows.legal_graph import TNLawGraph, TCA_DOMAIN_COVERAGE; print(f'✅ TNLawGraph importable  domains={list(TCA_DOMAIN_COVERAGE)}')"
+          python -c "from model_config import get_active_model_name; print('✅ model_config importable')"
+
+      - name: Verify FastAPI app loads
+        env:
+          ACTIVE_BACKEND: ollama
+          OLLAMA_BASE_URL: http://localhost:11434
+        run: |
+          python -c "
+          import importlib, sys
+          # Patch get_llm so it doesn't connect to Ollama
+          import model_config
+          model_config.get_llm = lambda *a, **kw: None
+          import main_fastapi
+          print('✅ FastAPI app loaded')
+          "
+
+  # ──────────────────────────────────────────────
+  # Integration Tests (runs only when secrets set)
+  # ──────────────────────────────────────────────
+  integration:
+    name: Integration Tests (Groq)
+    runs-on: ubuntu-latest
+    # Only run when GROQ_API_KEY is available as a repository secret
+    if: ${{ secrets.GROQ_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run integration tests
+        env:
+          ACTIVE_BACKEND: groq
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama3-8b-8192
+        run: pytest test_production.py -v -m integration --tb=short
